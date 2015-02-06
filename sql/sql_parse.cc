@@ -755,6 +755,10 @@ bool do_command(THD *thd)
     thd->wsrep_query_state= QUERY_EXEC;
     mysql_mutex_unlock(&thd->LOCK_wsrep_thd);
   }
+  else
+  {
+      packet_length= 0; /* shut up the compiler */
+  }
   if ((WSREP(thd)  && packet_length == packet_error) ||
       (!WSREP(thd) && (packet_length= my_net_read(net)) == packet_error))
 #else
