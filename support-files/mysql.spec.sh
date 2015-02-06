@@ -1026,7 +1026,6 @@ echo "====="                                     >> $STATUS_HISTORY
 %doc Docs/ChangeLog
 %doc release/Docs/INFO_SRC*
 %doc release/Docs/INFO_BIN*
-%doc release/support-files/my-default.cnf
 %doc Docs/README-wsrep
 %doc release/support-files/wsrep.cnf
 %doc release/support-files/wsrep_notify
