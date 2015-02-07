@@ -432,9 +432,14 @@ touch optional-files-devel
 # name, finally a default.  RPM_OPT_FLAGS is assumed to be a part of the
 # default RPM build environment.
 #
+# We set CXX=gcc by default to support so-called 'generic' binaries, where we
+# do not have a dependancy on libgcc/libstdc++.  This only works while we do
+# not require C++ features such as exceptions, and may need to be removed at
+# a later date.
+#
 
 # This is a hack, $RPM_OPT_FLAGS on ia64 hosts contains flags which break
-# the compile in cmd-line-utils/libedit - needs investigation, but for now
+# the compile in cmd-line-utils/readline - needs investigation, but for now
 # we simply unset it and use those specified directly in cmake.
 %if "%{_arch}" == "ia64"
 RPM_OPT_FLAGS=
@@ -448,15 +453,6 @@ export CXXFLAGS=${MYSQL_BUILD_CXXFLAGS:-${CXXFLAGS:-$RPM_OPT_FLAGS -felide-const
 export LDFLAGS=${MYSQL_BUILD_LDFLAGS:-${LDFLAGS:-}}
 export CMAKE=${MYSQL_BUILD_CMAKE:-${CMAKE:-cmake}}
 export MAKE_JFLAG=${MYSQL_BUILD_MAKE_JFLAG:--j$(ncpu=$(cat /proc/cpuinfo | grep processor | wc -l) && echo $(($ncpu > 4 ? 4 : $ncpu)))}
-
-# By default, a build will include the bundeled "yaSSL" library for SSL.
-# However, there may be a need to override.
-# Protect against undefined variables if there is no override option.
-%if %{undefined with_ssl}
-%define ssl_option   %{nil}
-%else
-%define ssl_option   -DWITH_SSL=%{with_ssl}
-%endif
 
 # Build debug mysqld and libmysqld.a
 mkdir debug
@@ -484,7 +480,6 @@ mkdir debug
            -DENABLE_DTRACE=OFF \
            -DMYSQL_UNIX_ADDR="%{mysqldatadir}/mysql.sock" \
            -DFEATURE_SET="%{feature_set}" \
-           %{ssl_option} \
            -DCOMPILATION_COMMENT="%{compilation_comment_debug}" \
            -DMYSQL_SERVER_SUFFIX="%{server_suffix}" \
            -DWITH_WSREP=1 \
@@ -504,7 +499,6 @@ mkdir release
            -DENABLE_DTRACE=OFF \
            -DMYSQL_UNIX_ADDR="%{mysqldatadir}/mysql.sock" \
            -DFEATURE_SET="%{feature_set}" \
-           %{ssl_option} \
            -DCOMPILATION_COMMENT="%{compilation_comment_release}" \
            -DMYSQL_SERVER_SUFFIX="%{server_suffix}" \
            -DWITH_WSREP=1 \
@@ -543,6 +537,23 @@ mkdir -p $RBR%{_sysconfdir}/my.cnf.d
 (
   cd $MBD/release
   make DESTDIR=$RBR install
+)
+
+# For gcc builds, include libgcc.a in the devel subpackage (BUG 4921).  Do
+# this in a sub-shell to ensure we don't pollute the install environment
+# with compiler bits.
+(
+  PATH=${MYSQL_BUILD_PATH:-$PATH}
+  CC=${MYSQL_BUILD_CC:-${CC:-gcc}}
+  CFLAGS=${MYSQL_BUILD_CFLAGS:-${CFLAGS:-$RPM_OPT_FLAGS}}
+  if "${CC}" -v 2>&1 | grep '^gcc.version' >/dev/null 2>&1; then
+    libgcc=`${CC} ${CFLAGS} --print-libgcc-file`
+    if [ -f ${libgcc} ]; then
+      mkdir -p $RBR%{_libdir}/mysql
+      install -m 644 ${libgcc} $RBR%{_libdir}/mysql/libmygcc.a
+      echo "%{_libdir}/mysql/libmygcc.a" >>optional-files-devel
+    fi
+  fi
 )
 
 # FIXME: at some point we should stop doing this and just install everything
@@ -722,6 +733,11 @@ NEW_VERSION=%{mysql_version}-%{release}
 
 # The "pre" section code is also run on a first installation,
 # when there  is no data directory yet. Protect against error messages.
+if [ -d $mysql_datadir ] ; then
+       echo "MySQL RPM upgrade to version $NEW_VERSION"  > $STATUS_FILE
+       echo "'pre' step running at `date`"          >> $STATUS_FILE
+       echo                                         >> $STATUS_FILE
+       fcount=`ls -ltr $mysql_datadir/*.err 2>/dev/null | wc -l`
         if [ $fcount -gt 0 ] ; then
             echo "ERR file(s):"                          >> $STATUS_FILE
             ls -ltr $mysql_datadir/*.err                 >> $STATUS_FILE
@@ -1190,6 +1206,9 @@ echo "====="                                     >> $STATUS_HISTORY
 # merging BK trees)
 ##############################################################################
 %changelog
+* Sat Feb 7 2015 Teemu Ollakka <teemu.ollakka@galeracluster.com>
+- Merged OBS changes from 5.6 branch
+
 * Thu Jan 29 2015 Joerg Bruehe <joerg.bruehe@fromdual.com>
 - Add a meta-package "mysql-wsrep" that requires both "server" and "client".
 - Fix the fall-back definition of "dist", it must start with a period.
@@ -1205,8 +1224,8 @@ echo "====="                                     >> $STATUS_HISTORY
 - Reworked to build wsrep patched packages exclusively
 - OBS compatible
 
-* Wed May 28 2014 Balasubramanian Kandasamy <balasubramanian.kandasamy@oracle.com>
-- Updated usergroup to mysql on datadir
+* Wed Jul 02 2014 Bjorn Munch <bjorn.munch@oracle.com>
+- Disable dtrace unconditionally, breaks after we install Oracle dtrace
 
 * Wed Oct 30 2013 Balasubramanian Kandasamy <balasubramanian.kandasamy@oracle.com>
 - Removed non gpl file docs/mysql.info from community packages
@@ -1220,22 +1239,6 @@ echo "====="                                     >> $STATUS_HISTORY
 * Wed Jun 26 2013 Balasubramanian Kandasamy <balasubramanian.kandasamy@oracle.com>
 - Cleaned up spec file to resolve rpm dependencies.
 
-* Mon Nov 05 2012 Joerg Bruehe <joerg.bruehe@oracle.com>
-
-- Allow to override the default to use the bundled yaSSL by an option like
-      --define="with_ssl /path/to/ssl"
-
-* Wed Oct 10 2012 Bjorn Munch <bjorn.munch@oracle.com>
-
-- Replace old my-*.cnf config file examples with template my-default.cnf
-
-* Fri Oct 05 2012 Joerg Bruehe <joerg.bruehe@oracle.com>
-
-- Let the installation use the new option "--random-passwords" of "mysql_install_db".
-  (Bug# 12794345 Ensure root password)
-- Fix an inconsistency: "new install" vs "upgrade" are told from the (non)existence
-  of "$mysql_datadir/mysql" (holding table "mysql.user" and other system stuff).
-
 * Tue Jul 24 2012 Joerg Bruehe <joerg.bruehe@oracle.com>
 
 - Add a macro "runselftest":
@@ -1244,17 +1247,9 @@ echo "====="                                     >> $STATUS_HISTORY
       --define "runselftest 0"
   Failures of the test suite will NOT make the RPM build fail!
 
-* Mon Jul 16 2012 Joerg Bruehe <joerg.bruehe@oracle.com>
-
-- Add the man page for the "mysql_config_editor".
-
 * Mon Jun 11 2012 Joerg Bruehe <joerg.bruehe@oracle.com>
 
 - Make sure newly added "SPECIFIC-ULN/" directory does not disturb packaging.
-
-* Wed Feb 29 2012 Brajmohan Saxena <brajmohan.saxena@oracle.com>
-
-- Removal all traces of the readline library from mysql (BUG 13738013)
 
 * Wed Sep 28 2011 Joerg Bruehe <joerg.bruehe@oracle.com>
 
@@ -1285,12 +1280,6 @@ echo "====="                                     >> $STATUS_HISTORY
 * Thu Sep 08 2011 Daniel Fischer <daniel.fischer@oracle.com>
 
 - Add mysql_plugin man page.
-
-* Tue Aug 30 2011 Tor Didriksen <tor.didriksen@oracle.com>
-
-- Set CXX=g++ by default to add a dependency on libgcc/libstdc++.
-  Also, remove the use of the -fno-exceptions and -fno-rtti flags.
-  TODO: update distro_buildreq/distro_requires
 
 * Tue Aug 30 2011 Joerg Bruehe <joerg.bruehe@oracle.com>
 
@@ -1326,7 +1315,7 @@ echo "====="                                     >> $STATUS_HISTORY
   ("datadir" and "pid-file"), the mechanism to detect a running server (on upgrade)
   should still work, and use these locations.
   The problem was that the fix for bug#27072 did not check for local settings.
-  
+
 * Mon Jan 31 2011 Joerg Bruehe <joerg.bruehe@oracle.com>
 
 - Install the new "manifest" files: "INFO_SRC" and "INFO_BIN".
